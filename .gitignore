@@ -1,1 +1,4 @@
 .tta-local-memory/
+.env
+__pycache__/
+*.pyc

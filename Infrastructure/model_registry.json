@@ -1,0 +1,49 @@
+{
+  "providers": [
+    {
+      "provider": "huiyan_cn",
+      "model_name": [
+        "gpt-5.4",
+        "gpt-5.5",
+        "claude-sonnet-4-6",
+        "deepseek-v3.1",
+        "qwen3.6-plus",
+        "gemini-3-flash-preview"
+      ],
+      "base_url": "https://api.huiyan-ai.cn/v1/messages",
+      "api_key": "${HUIYAN_API_KEY}",
+      "api_style": "anthropic"
+    },
+    {
+      "provider": "anthropic",
+      "model_name": [
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5",
+        "claude-opus-4-7"
+      ],
+      "base_url": "https://api.anthropic.com/v1/messages",
+      "api_key": "${ANTHROPIC_API_KEY}",
+      "api_style": "anthropic"
+    },
+    {
+      "provider": "deepseek",
+      "model_name": [
+        "deepseek-v4-flash",
+        "deepseek-v4-pro"
+      ],
+      "base_url": "https://api.deepseek.com/chat/completions",
+      "api_key": "${DEEPSEEK_API_KEY}",
+      "api_style": "openai"
+    },
+    {
+      "provider": "xiaomi",
+      "model_name": [
+        "MiMo-V2.5-Pro",
+        "MiMo-V2.5"
+      ],
+      "base_url": "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions",
+      "api_key": "${XIAOMI_API_KEY}",
+      "api_style": "openai"
+    }
+  ]
+}
