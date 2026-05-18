@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Task Status Graph</title>
+    <link rel="stylesheet" href="/style.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1>Task Status Graph</h1>
+          <p>SQLite Inquiry DAG viewer</p>
+        </div>
+        <button id="refreshButton" type="button">Refresh</button>
+      </header>
+
+      <section class="toolbar" aria-label="Filters">
+        <label><input type="checkbox" value="active" checked> active</label>
+        <label><input type="checkbox" value="blocked" checked> blocked</label>
+        <label><input type="checkbox" value="ready" checked> ready</label>
+        <label><input type="checkbox" value="done" checked> done</label>
+        <label><input type="checkbox" value="candidate"> candidate</label>
+        <label class="depth-filter" for="maxDepthInput">
+          root distance ≤
+          <input id="maxDepthInput" type="number" min="0" step="1" value="4" inputmode="numeric">
+        </label>
+      </section>
+
+      <section class="layout">
+        <section class="graph-panel">
+          <svg id="graph" role="img" aria-label="Task status graph"></svg>
+        </section>
+
+        <aside class="details-panel">
+          <section class="counts" id="counts"></section>
+          <section id="details" class="details">
+            <h2>No node selected</h2>
+            <p>Click a node to inspect its content, answer, and graph relations.</p>
+          </section>
+        </aside>
+      </section>
+    </main>
+
+    <script src="/app.js?v=blank-clear-20260510-5"></script>
+  </body>
+</html>

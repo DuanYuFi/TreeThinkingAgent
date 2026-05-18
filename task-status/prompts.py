@@ -14,7 +14,8 @@ Return strict JSON only, with this shape:
   "inquiries": [
     {
       "client_id": "short stable temporary id such as I1",
-      "content": "the inquiry content in Chinese or the conversation language",
+      "content": "natural-language task or inquiry, in Chinese or the conversation language",
+      "description": "one concrete explanation of this node, max 50 Chinese characters or 50 total characters",
       "status": "candidate|ready|active|blocked|done",
       "answer": "optional concise answer; use null if unresolved",
       "importance": 0.0,
@@ -30,6 +31,14 @@ Return strict JSON only, with this shape:
     }
   ]
 }
+
+Writing rules:
+- `content` should be natural and specific enough to recover context later.
+- Avoid abstract labels such as "define X responsibilities". Prefer phrasing like
+  "clarify what X owns, what it produces, and where its boundary is".
+- `description` must explain what this node is about or what output it should
+  produce. Keep it <= 50 characters. Do not repeat the title verbatim.
+- Prefer concrete engineering language over taxonomy-like nouns.
 
 Status rules:
 - candidate: fleeting idea captured for possible later review.
@@ -50,6 +59,7 @@ def build_extraction_user_prompt(
     min_importance: float,
     min_confidence: float,
     max_inquiries: int,
+    dedupe_threshold: float | None = None,
 ) -> str:
     return f"""Parse the conversation into task-status inquiries.
 
@@ -57,6 +67,7 @@ Insertion thresholds:
 - min_importance: {min_importance}
 - min_confidence: {min_confidence}
 - max_inquiries: {max_inquiries}
+{f"- dedupe_threshold: {dedupe_threshold}" if dedupe_threshold is not None else ""}
 
 Only include inquiries that meet the thresholds. If nothing qualifies, return
 {{"inquiries": [], "edges": []}}.

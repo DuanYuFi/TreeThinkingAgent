@@ -11,6 +11,8 @@
 - `base_url`：接口地址
 - `api_key`：密钥（推荐使用 `${ENV_VAR}`）
 - `api_style`：`openai` 或 `anthropic`
+- `embedding_base_url`：可选；OpenAI-compatible embedding endpoint。未配置时会从
+  `base_url` 推导，例如 `/v1/messages` -> `/v1/embeddings`。
 
 ## 2) 模型与会话管理类
 
@@ -43,3 +45,21 @@ print(reply)
 ```
 
 > 注意：如果 `api_key` 使用 `${OPENAI_API_KEY}` 这类占位符，请先在环境变量中设置对应 key。
+
+## 4) Embedding 用法
+
+Embedding 模型不走 chat/messages 接口。使用 `embed_text` 或 `embed_texts`：
+
+```python
+from Infrastructure.llm_infrastructure import ModelRegistry, LLMInfrastructure
+
+registry = ModelRegistry("Infrastructure/model_registry.json")
+infra = LLMInfrastructure(registry)
+
+vector = infra.embed_text(
+    provider="huiyan_openai_claude",
+    model_name="text-embedding-3-small",
+    text="TreeThinkingAgent connectivity probe.",
+)
+print(len(vector))
+```

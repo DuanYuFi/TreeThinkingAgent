@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 from urllib import request
 
 
@@ -22,6 +23,7 @@ class ProviderDefinition:
     base_url: str
     api_key: str
     api_style: APIStyle
+    embedding_base_url: str | None = None
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "ProviderDefinition":
@@ -47,6 +49,11 @@ class ProviderDefinition:
             base_url=str(payload["base_url"]),
             api_key=_resolve_env_value(str(payload["api_key"])),
             api_style=style,
+            embedding_base_url=(
+                str(payload["embedding_base_url"])
+                if payload.get("embedding_base_url") is not None
+                else None
+            ),
         )
 
 
@@ -84,6 +91,18 @@ class TokenUsage:
 class ChatResult:
     reply: str
     usage: TokenUsage
+
+
+@dataclass(slots=True)
+class EmbeddingUsage:
+    prompt_tokens: int = 0
+    total_tokens: int = 0
+
+
+@dataclass(slots=True)
+class EmbeddingResult:
+    embeddings: list[list[float]]
+    usage: EmbeddingUsage
 
 
 class ModelRegistry:
@@ -175,7 +194,7 @@ class LLMInfrastructure:
         session_id: str,
         *,
         max_tokens: int = 1024,
-        temperature: float = 0.7,
+        temperature: float | None = 0.7,
     ) -> tuple[str, dict[str, str], bytes]:
         definition = self.model_registry.get(provider, model_name)
         session = self.get_session(session_id)
@@ -188,8 +207,9 @@ class LLMInfrastructure:
                     for msg in session.context
                 ],
                 "max_tokens": max_tokens,
-                "temperature": temperature,
             }
+            if temperature is not None:
+                payload["temperature"] = temperature
             headers = {
                 "Authorization": f"Bearer {definition.api_key}",
                 "Content-Type": "application/json",
@@ -206,8 +226,9 @@ class LLMInfrastructure:
                 "model": model_name,
                 "messages": non_system_messages,
                 "max_tokens": max_tokens,
-                "temperature": temperature,
             }
+            if temperature is not None:
+                payload["temperature"] = temperature
             if system_messages:
                 payload["system"] = "\n\n".join(system_messages)
 
@@ -222,6 +243,29 @@ class LLMInfrastructure:
         body = json.dumps(payload).encode("utf-8")
         return definition.base_url, headers, body
 
+    def build_embedding_request(
+        self,
+        provider: str,
+        model_name: str,
+        inputs: str | list[str],
+        *,
+        dimensions: int | None = None,
+    ) -> tuple[str, dict[str, str], bytes]:
+        definition = self.model_registry.get(provider, model_name)
+        payload: dict[str, Any] = {
+            "model": model_name,
+            "input": inputs,
+        }
+        if dimensions is not None:
+            payload["dimensions"] = dimensions
+
+        headers = {
+            "Authorization": f"Bearer {definition.api_key}",
+            "Content-Type": "application/json",
+        }
+        body = json.dumps(payload).encode("utf-8")
+        return _embedding_url_for_provider(definition), headers, body
+
     def chat_once(
         self,
         provider: str,
@@ -230,7 +274,7 @@ class LLMInfrastructure:
         user_message: str,
         *,
         max_tokens: int = 1024,
-        temperature: float = 0.7,
+        temperature: float | None = 0.7,
         timeout_seconds: int = 120,
     ) -> str:
         result = self.chat_once_with_usage(
@@ -252,7 +296,7 @@ class LLMInfrastructure:
         user_message: str,
         *,
         max_tokens: int = 1024,
-        temperature: float = 0.7,
+        temperature: float | None = 0.7,
         timeout_seconds: int = 120,
     ) -> ChatResult:
         self.append_message(session_id, "user", user_message)
@@ -276,6 +320,68 @@ class LLMInfrastructure:
         )
         self.append_message(session_id, "assistant", reply)
         return ChatResult(reply=reply, usage=usage)
+
+    def embed_text(
+        self,
+        provider: str,
+        model_name: str,
+        text: str,
+        *,
+        dimensions: int | None = None,
+        timeout_seconds: int = 120,
+    ) -> list[float]:
+        result = self.embed_texts_with_usage(
+            provider=provider,
+            model_name=model_name,
+            texts=[text],
+            dimensions=dimensions,
+            timeout_seconds=timeout_seconds,
+        )
+        return result.embeddings[0]
+
+    def embed_texts(
+        self,
+        provider: str,
+        model_name: str,
+        texts: list[str],
+        *,
+        dimensions: int | None = None,
+        timeout_seconds: int = 120,
+    ) -> list[list[float]]:
+        result = self.embed_texts_with_usage(
+            provider=provider,
+            model_name=model_name,
+            texts=texts,
+            dimensions=dimensions,
+            timeout_seconds=timeout_seconds,
+        )
+        return result.embeddings
+
+    def embed_texts_with_usage(
+        self,
+        provider: str,
+        model_name: str,
+        texts: list[str],
+        *,
+        dimensions: int | None = None,
+        timeout_seconds: int = 120,
+    ) -> EmbeddingResult:
+        if not texts:
+            return EmbeddingResult(embeddings=[], usage=EmbeddingUsage())
+
+        url, headers, body = self.build_embedding_request(
+            provider,
+            model_name,
+            texts,
+            dimensions=dimensions,
+        )
+        http_request = request.Request(url=url, headers=headers, method="POST", data=body)
+        with request.urlopen(http_request, timeout=timeout_seconds) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        embeddings = self._extract_embeddings(payload, expected_count=len(texts))
+        usage = self._extract_embedding_usage(payload)
+        return EmbeddingResult(embeddings=embeddings, usage=usage)
 
     @staticmethod
     def _extract_reply_text(api_style: APIStyle, payload: dict[str, Any]) -> str:
@@ -315,6 +421,37 @@ class LLMInfrastructure:
 
         return TokenUsage()
 
+    @staticmethod
+    def _extract_embeddings(payload: dict[str, Any], *, expected_count: int) -> list[list[float]]:
+        data = payload.get("data")
+        if not isinstance(data, list):
+            raise ValueError("Embedding response did not contain a data list.")
+
+        ordered = sorted(data, key=lambda item: item.get("index", 0))
+        embeddings: list[list[float]] = []
+        for item in ordered:
+            vector = item.get("embedding") if isinstance(item, dict) else None
+            if not isinstance(vector, list):
+                raise ValueError("Embedding response item did not contain an embedding list.")
+            embeddings.append([float(value) for value in vector])
+
+        if len(embeddings) != expected_count:
+            raise ValueError(
+                "Embedding response shape did not match request input: "
+                f"expected {expected_count}, got {len(embeddings)}."
+            )
+        return embeddings
+
+    @staticmethod
+    def _extract_embedding_usage(payload: dict[str, Any]) -> EmbeddingUsage:
+        usage = payload.get("usage", {})
+        if not isinstance(usage, dict):
+            return EmbeddingUsage()
+        return EmbeddingUsage(
+            prompt_tokens=int(usage.get("prompt_tokens") or 0),
+            total_tokens=int(usage.get("total_tokens") or 0),
+        )
+
 
 def _resolve_env_value(raw_value: str) -> str:
     """
@@ -330,3 +467,15 @@ def _resolve_env_value(raw_value: str) -> str:
         return resolved
     return raw_value
 
+
+def _embedding_url_for_provider(definition: ProviderDefinition) -> str:
+    if definition.embedding_base_url:
+        return definition.embedding_base_url
+
+    parts = urlsplit(definition.base_url)
+    path = parts.path.rstrip("/")
+    if path.endswith("/chat/completions"):
+        path = path[: -len("/chat/completions")]
+    elif path.endswith("/messages"):
+        path = path[: -len("/messages")]
+    return urlunsplit(parts._replace(path=f"{path}/embeddings"))

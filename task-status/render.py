@@ -81,8 +81,11 @@ def format_inquiry(item: dict[str, Any], *, include_answer: bool) -> str:
     inquiry_id = item.get("id", "unknown")
     status = item.get("status", "candidate")
     content = item.get("content", "")
+    description = item.get("description", "")
     score = item.get("importance", 0.0)
     line = f"- `{inquiry_id}` {status}: {content} (importance={score:.2f})"
+    if description:
+        line += f"\n  description: {description}"
     answer = item.get("answer")
     if include_answer and answer:
         line += f"\n  answer: {answer}"

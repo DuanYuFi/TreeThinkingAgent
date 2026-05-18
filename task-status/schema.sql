@@ -2,7 +2,10 @@ PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS inquiries (
     id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL DEFAULT 'default',
+    is_root INTEGER NOT NULL DEFAULT 0,
     content TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '' CHECK (length(description) <= 50),
     status TEXT NOT NULL CHECK (status IN ('candidate', 'ready', 'active', 'blocked', 'done')),
     answer TEXT,
     importance REAL NOT NULL DEFAULT 0.0 CHECK (importance >= 0.0 AND importance <= 1.0),
