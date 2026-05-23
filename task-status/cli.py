@@ -26,7 +26,8 @@ from store import (
     graph_snapshot,
     init_db,
     parse_extraction_payload,
-    upsert_inquiries,
+    preview_task_changes,
+    upsert_tasks,
 )
 
 
@@ -45,6 +46,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "ingest":
         conversation = read_conversation(args)
         return ingest(args, conn, conversation)
+    if args.command == "preview":
+        conversation = read_conversation(args)
+        return preview(args, conn, conversation)
     if args.command == "render":
         conversation = read_conversation(args)
         return render(args, conn, conversation)
@@ -59,12 +63,12 @@ def main(argv: list[str] | None = None) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="SQLite-backed Inquiry DAG for TTA task-status memory."
+        description="SQLite-backed Task DAG for GTA task-status memory."
     )
     parser.add_argument(
         "--db",
         default=str(DEFAULT_DB_PATH),
-        help="SQLite database path. Defaults to .tta-local-memory/task-status.sqlite.",
+        help="SQLite database path. Defaults to .gta-local-memory/task-status.sqlite.",
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -72,19 +76,45 @@ def build_parser() -> argparse.ArgumentParser:
 
     ingest_parser = subparsers.add_parser(
         "ingest",
-        help="Use an LLM to parse a conversation and insert high-signal inquiries.",
+        help="Use an LLM to parse a conversation and insert high-signal tasks.",
     )
     add_conversation_args(ingest_parser)
     add_llm_args(ingest_parser)
     ingest_parser.add_argument("--source-label", default=None)
-    ingest_parser.add_argument("--min-importance", type=float, default=0.65)
+    ingest_parser.add_argument(
+        "--min-importance",
+        choices=("low", "medium", "high"),
+        default="medium",
+        help="Minimum task priority to ingest.",
+    )
     ingest_parser.add_argument("--min-confidence", type=float, default=0.55)
-    ingest_parser.add_argument("--max-inquiries", type=int, default=8)
+    ingest_parser.add_argument("--max-tasks", type=int, default=8)
     ingest_parser.add_argument(
         "--dedupe-threshold",
         type=float,
         default=0.72,
-        help="Similarity threshold for skipping related existing inquiries.",
+        help="Similarity threshold for skipping related existing tasks.",
+    )
+
+    preview_parser = subparsers.add_parser(
+        "preview",
+        help="Use an LLM to parse tasks and preview changes without writing them.",
+    )
+    add_conversation_args(preview_parser)
+    add_llm_args(preview_parser)
+    preview_parser.add_argument(
+        "--min-importance",
+        choices=("low", "medium", "high"),
+        default="medium",
+        help="Minimum task priority to preview.",
+    )
+    preview_parser.add_argument("--min-confidence", type=float, default=0.55)
+    preview_parser.add_argument("--max-tasks", type=int, default=8)
+    preview_parser.add_argument(
+        "--dedupe-threshold",
+        type=float,
+        default=0.72,
+        help="Similarity threshold for marking related existing tasks as duplicates.",
     )
 
     render_parser = subparsers.add_parser(
@@ -103,7 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     state_parser = subparsers.add_parser(
         "state",
-        help="Render deterministic state memory from the current Inquiry DAG.",
+        help="Render deterministic state memory from the current Task DAG.",
     )
     state_mode = state_parser.add_mutually_exclusive_group(required=True)
     state_mode.add_argument(
@@ -173,11 +203,57 @@ def read_conversation(args: argparse.Namespace) -> str:
 
 
 def ingest(args: argparse.Namespace, conn, conversation: str) -> int:
+    tasks, edges, _payload = extract_task_candidates(args, conversation)
+    result = upsert_tasks(
+        conn,
+        tasks,
+        edges,
+        conversation=conversation,
+        source_label=args.source_label,
+        provider=args.provider,
+        model_name=args.model,
+        min_importance=args.min_importance,
+        min_confidence=args.min_confidence,
+        max_tasks=args.max_tasks,
+        dedupe_threshold=args.dedupe_threshold,
+    )
+    print_json(result)
+    return 0
+
+
+def preview(args: argparse.Namespace, conn, conversation: str) -> int:
+    tasks, edges, payload = extract_task_candidates(args, conversation)
+    result = preview_task_changes(
+        conn,
+        tasks,
+        edges,
+        conversation=conversation,
+        min_importance=args.min_importance,
+        min_confidence=args.min_confidence,
+        max_tasks=args.max_tasks,
+        dedupe_threshold=args.dedupe_threshold,
+    )
+    print_json(
+        {
+            "mode": "dry_run",
+            "provider": args.provider,
+            "model": args.model,
+            "raw_payload": payload,
+            "preview": result,
+        }
+    )
+    return 0
+
+
+def extract_task_candidates(
+    args: argparse.Namespace,
+    conversation: str,
+) -> tuple[list, list, dict]:
     user_prompt = build_extraction_user_prompt(
         conversation,
         min_importance=args.min_importance,
         min_confidence=args.min_confidence,
-        max_inquiries=args.max_inquiries,
+        max_tasks=args.max_tasks,
         dedupe_threshold=args.dedupe_threshold,
     )
     reply = complete_with_infrastructure(
@@ -189,22 +265,8 @@ def ingest(args: argparse.Namespace, conn, conversation: str) -> int:
         temperature=args.temperature,
     )
     payload = extract_json_object(reply)
-    inquiries, edges = parse_extraction_payload(payload)
-    result = upsert_inquiries(
-        conn,
-        inquiries,
-        edges,
-        conversation=conversation,
-        source_label=args.source_label,
-        provider=args.provider,
-        model_name=args.model,
-        min_importance=args.min_importance,
-        min_confidence=args.min_confidence,
-        max_inquiries=args.max_inquiries,
-        dedupe_threshold=args.dedupe_threshold,
-    )
-    print_json(result)
-    return 0
+    tasks, edges = parse_extraction_payload(payload)
+    return tasks, edges, payload
 
 
 def render(args: argparse.Namespace, conn, conversation: str) -> int:

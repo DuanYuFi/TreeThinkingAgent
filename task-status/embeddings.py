@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 
 from llm_client import load_dotenv_if_available, repo_root
-from store import source_hash, utc_now
+from store import IMPORTANCE_ORDER_SQL, source_hash, utc_now
 
 
 DEFAULT_EMBEDDING_PROVIDER = "huiyan_openai_claude"
@@ -37,8 +37,8 @@ class EmbeddingUnavailableError(RuntimeError):
 def ensure_embedding_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS inquiry_embeddings (
-            inquiry_id TEXT NOT NULL REFERENCES inquiries(id) ON DELETE CASCADE,
+        CREATE TABLE IF NOT EXISTS task_embeddings (
+            task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
             model TEXT NOT NULL,
             dimension_request INTEGER NOT NULL DEFAULT 0,
             vector_dimensions INTEGER NOT NULL,
@@ -46,14 +46,33 @@ def ensure_embedding_schema(conn: sqlite3.Connection) -> None:
             embedding BLOB NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            PRIMARY KEY (inquiry_id, model, dimension_request)
+            PRIMARY KEY (task_id, model, dimension_request)
         )
         """
     )
     conn.execute(
         """
-        CREATE INDEX IF NOT EXISTS idx_inquiry_embeddings_model
-        ON inquiry_embeddings(model, dimension_request)
+        CREATE INDEX IF NOT EXISTS idx_task_embeddings_model
+        ON task_embeddings(model, dimension_request)
+        """
+    )
+    migrate_legacy_embeddings(conn)
+
+
+def migrate_legacy_embeddings(conn: sqlite3.Connection) -> None:
+    has_legacy = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'inquiry_embeddings'"
+    ).fetchone()
+    if not has_legacy:
+        return
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO task_embeddings
+            (task_id, model, dimension_request, vector_dimensions, content_hash,
+             embedding, created_at, updated_at)
+        SELECT inquiry_id, model, dimension_request, vector_dimensions, content_hash,
+               embedding, created_at, updated_at
+        FROM inquiry_embeddings
         """
     )
 
@@ -81,10 +100,10 @@ def refresh_embeddings(
 ) -> dict[str, int]:
     ensure_embedding_schema(conn)
     rows = conn.execute(
-        """
-        SELECT id, content, description, answer
-        FROM inquiries
-        ORDER BY importance DESC, updated_at DESC
+        f"""
+        SELECT id, name, description, notes
+        FROM tasks
+        ORDER BY {IMPORTANCE_ORDER_SQL} DESC, updated_at DESC
         """
     ).fetchall()
     stale = [
@@ -102,11 +121,11 @@ def refresh_embeddings(
             for row, vector, text in zip(batch, vectors, texts, strict=True):
                 conn.execute(
                     """
-                    INSERT INTO inquiry_embeddings
-                        (inquiry_id, model, dimension_request, vector_dimensions,
+                    INSERT INTO task_embeddings
+                        (task_id, model, dimension_request, vector_dimensions,
                          content_hash, embedding, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(inquiry_id, model, dimension_request)
+                    ON CONFLICT(task_id, model, dimension_request)
                     DO UPDATE SET
                         vector_dimensions = excluded.vector_dimensions,
                         content_hash = excluded.content_hash,
@@ -138,8 +157,8 @@ def is_embedding_stale(
     existing = conn.execute(
         """
         SELECT content_hash
-        FROM inquiry_embeddings
-        WHERE inquiry_id = ? AND model = ? AND dimension_request = ?
+        FROM task_embeddings
+        WHERE task_id = ? AND model = ? AND dimension_request = ?
         """,
         (row["id"], config.cache_model_key, config.dimension_request),
     ).fetchone()
@@ -154,14 +173,14 @@ def load_embedding_index(
     ensure_embedding_schema(conn)
     rows = conn.execute(
         """
-        SELECT inquiry_id, vector_dimensions, embedding
-        FROM inquiry_embeddings
+        SELECT task_id, vector_dimensions, embedding
+        FROM task_embeddings
         WHERE model = ? AND dimension_request = ?
         """,
         (config.cache_model_key, config.dimension_request),
     ).fetchall()
     return {
-        row["inquiry_id"]: unpack_vector(row["embedding"], row["vector_dimensions"])
+        row["task_id"]: unpack_vector(row["embedding"], row["vector_dimensions"])
         for row in rows
     }
 
@@ -203,11 +222,11 @@ def embed_texts(texts: list[str], *, config: EmbeddingConfig) -> list[list[float
 
 def embedding_text(row: sqlite3.Row) -> str:
     parts = [
-        f"title: {row['content']}",
+        f"name: {row['name']}",
         f"description: {row['description']}",
     ]
-    if row["answer"]:
-        parts.append(f"answer: {row['answer']}")
+    if row["notes"]:
+        parts.append(f"notes: {row['notes']}")
     return "\n".join(parts)
 
 

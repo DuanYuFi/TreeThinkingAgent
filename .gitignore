@@ -1,4 +1,4 @@
-.tta-local-memory/
+.gta-local-memory/
 .env
 __pycache__/
 *.pyc

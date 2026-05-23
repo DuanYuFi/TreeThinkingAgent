@@ -511,7 +511,7 @@ function drawGraph() {
 
   if (!graphNodes.length) {
     const text = makeSvg("text", { x: width / 2, y: height / 2, "text-anchor": "middle", class: "empty" });
-    text.textContent = "No inquiries match the current filters.";
+    text.textContent = "No tasks match the current filters.";
     svg.appendChild(text);
     return;
   }
@@ -596,7 +596,7 @@ function drawGraph() {
       transform: `translate(${node.x},${node.y})`,
       tabindex: "0",
       role: "button",
-      "aria-label": node.description ? `${node.content} ${node.description}` : node.content,
+      "aria-label": node.description ? `${node.name} ${node.description}` : node.name,
       "data-node-id": node.id,
     });
     group.addEventListener("pointerenter", () => setHoveredNode(node.id));
@@ -640,7 +640,7 @@ function drawGraph() {
     });
 
     const title = makeSvg("title", {});
-    title.textContent = node.description ? `${node.content}\n${node.description}` : node.content;
+    title.textContent = node.description ? `${node.name}\n${node.description}` : node.name;
     group.appendChild(title);
 
     group.appendChild(makeSvg("circle", {
@@ -662,7 +662,7 @@ function drawGraph() {
       class: "node-title",
     });
     const titleLine = makeSvg("tspan", { x: "0", dy: "0" });
-    titleLine.textContent = truncate(node.content, 30);
+    titleLine.textContent = truncate(node.name, 30);
     label.appendChild(titleLine);
     if (node.description) {
       const descriptionLine = makeSvg("tspan", { x: "0", dy: "15", class: "node-description-line" });
@@ -983,12 +983,12 @@ function renderDetails() {
     ? '<button class="detail-action" type="button" disabled>Root is fixed</button>'
     : `<button class="detail-action" type="button" data-action="toggle-pin">${isPinned ? "Release position" : "Pin position"}</button>`;
   details.innerHTML = `
-    <h2>${escapeHtml(node.content)}</h2>
+    <h2>${escapeHtml(node.name)}</h2>
     <p class="node-description-detail">${escapeHtml(node.description || "No short explanation recorded.")}</p>
     <div class="meta">
       <span class="pill status-pill ${escapeHtml(node.status)}">${escapeHtml(node.status)}</span>
       ${root ? '<span class="pill root-pill">root</span>' : ''}
-      <span class="pill">importance ${formatScore(node.importance)}</span>
+      <span class="pill">importance ${escapeHtml(node.importance || "medium")}</span>
       <span class="pill">confidence ${formatScore(node.confidence)}</span>
       <span class="pill">root distance ${formatRootDistance(node.root_distance)}</span>
       <span class="pill">${movementLabel}</span>
@@ -1000,16 +1000,22 @@ function renderDetails() {
       ${sourceNode ? '<button class="detail-action subtle" type="button" data-action="clear-edge-source">Clear edge source</button>' : ''}
     </div>
     <form class="edit-form" data-form="node-content">
-      <label for="nodeContentInput">Content</label>
-      <textarea id="nodeContentInput" name="content" rows="4">${escapeHtml(node.content)}</textarea>
+      <label for="nodeNameInput">Name</label>
+      <input id="nodeNameInput" name="name" type="text" value="${escapeHtml(node.name)}">
       <label for="nodeDescriptionInput">Short explanation</label>
       <input id="nodeDescriptionInput" name="description" type="text" maxlength="50" value="${escapeHtml(node.description || "")}">
+      <label for="nodeNotesInput">Notes</label>
+      <textarea id="nodeNotesInput" name="notes" rows="3">${escapeHtml(node.notes || "")}</textarea>
+      <label for="nodeStatusInput">Status</label>
+      <select id="nodeStatusInput" name="status">${renderStatusOptions(node.status)}</select>
+      <label for="nodeImportanceInput">Importance</label>
+      <select id="nodeImportanceInput" name="importance">${renderImportanceOptions(node.importance)}</select>
       <button class="detail-action primary" type="submit">Save node</button>
     </form>
     ${renderCreateEdgeForm(sourceNode, node)}
-    <div class="answer">
-      <h3>Answer</h3>
-      <p>${node.answer ? escapeHtml(node.answer) : "No answer recorded."}</p>
+    <div class="notes">
+      <h3>Notes</h3>
+      <p>${node.notes ? escapeHtml(node.notes) : "No notes recorded."}</p>
     </div>
     <div class="relations">
       <h3>Outgoing</h3>
@@ -1045,8 +1051,11 @@ function renderDetails() {
       const formData = new FormData(editNodeForm);
       updateSelectedNodeContent(
         node.id,
-        formData.get("content"),
+        formData.get("name"),
         formData.get("description"),
+        formData.get("notes"),
+        formData.get("status"),
+        formData.get("importance"),
       );
     });
   }
@@ -1069,8 +1078,8 @@ function renderEdgeDetails(edge) {
       <span class="pill">edge ${escapeHtml(edgeIdentity(edge))}</span>
     </div>
     <div class="edge-summary">
-      <p><strong>Source</strong>: ${escapeHtml(source?.content ?? edge.source_id)}</p>
-      <p><strong>Target</strong>: ${escapeHtml(target?.content ?? edge.target_id)}</p>
+      <p><strong>Source</strong>: ${escapeHtml(source?.name ?? edge.source_id)}</p>
+      <p><strong>Target</strong>: ${escapeHtml(target?.name ?? edge.target_id)}</p>
       <p><strong>Note</strong>: ${edge.note ? escapeHtml(edge.note) : "No note."}</p>
     </div>
     <div class="detail-actions">
@@ -1079,6 +1088,20 @@ function renderEdgeDetails(edge) {
   `;
   const deleteButton = details.querySelector('[data-action="delete-edge"]');
   deleteButton.addEventListener("click", () => deleteSelectedEdge(edge));
+}
+
+function renderStatusOptions(current) {
+  return ["candidate", "ready", "active", "blocked", "done"].map((status) => {
+    const selected = status === current ? " selected" : "";
+    return `<option value="${status}"${selected}>${status}</option>`;
+  }).join("");
+}
+
+function renderImportanceOptions(current) {
+  return ["low", "medium", "high"].map((importance) => {
+    const selected = importance === current ? " selected" : "";
+    return `<option value="${importance}"${selected}>${importance}</option>`;
+  }).join("");
 }
 
 function renderCreateEdgeForm(sourceNode, targetNode) {
@@ -1110,11 +1133,11 @@ function renderCreateEdgeForm(sourceNode, targetNode) {
   `;
 }
 
-async function updateSelectedNodeContent(nodeId, content, description) {
+async function updateSelectedNodeContent(nodeId, name, description, notes, status, importance) {
   try {
     await requestJson(`/api/nodes/${encodeURIComponent(nodeId)}`, {
       method: "PATCH",
-      body: JSON.stringify({ content, description }),
+      body: JSON.stringify({ name, description, notes, status, importance }),
     });
     selectedId = nodeId;
     await loadGraph();
@@ -1185,17 +1208,18 @@ function renderRelationList(edges, otherKey) {
   }
   return `<ul>${edges.map((edge) => {
     const other = graphData.nodes.find((node) => node.id === edge[otherKey]);
-    const label = other ? other.content : edge[otherKey];
+    const label = other ? other.name : edge[otherKey];
     const note = edge.note ? `, ${escapeHtml(edge.note)}` : "";
     return `<li><strong>${escapeHtml(relationLabel(edge.relation))}</strong>: ${escapeHtml(label)}${note}</li>`;
   }).join("")}</ul>`;
 }
 
 function nodeRadius(node) {
+  const importanceSize = { low: 0, medium: 0.5, high: 1 }[node.importance] ?? 0.5;
   if (isRoot(node)) {
-    return 34 + Math.round(Number(node.importance || 0) * 10);
+    return 34 + Math.round(importanceSize * 10);
   }
-  return 17 + Math.round(Number(node.importance || 0) * 12);
+  return 17 + Math.round(importanceSize * 12);
 }
 
 function nodeLabelY(node, radius, height) {
@@ -1227,7 +1251,7 @@ function shortId(id) {
   if (node && isRoot(node)) {
     return "ROOT";
   }
-  return String(id || "").replace("inq_", "").slice(0, 4);
+  return String(id || "").replace("tsk_", "").replace("inq_", "").slice(0, 4);
 }
 
 function makeSvg(name, attributes) {

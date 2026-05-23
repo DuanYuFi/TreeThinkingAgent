@@ -2,18 +2,18 @@
 
 ## Purpose
 
-This subproject is the local task-status memory for building TTA. It stores durable
-project work as a SQLite-backed Inquiry DAG and can render a compact Markdown
+This subproject is the local task-status memory for building GTA. It stores durable
+project work as a SQLite-backed Task DAG and can render a compact Markdown
 memory block for an LLM context.
 
 Do not confuse this with the future product-level memory system. This module is a
-working tool for tracking our own engineering context while building TTA.
+working tool for tracking our own engineering context while building GTA.
 
 ## When To Use It
 
 Use task-status when you need to:
 
-- recover the current project task tree before doing nontrivial work;
+- recover the current project task graph before doing nontrivial work;
 - record durable decisions, open questions, blockers, or completed work;
 - update the visual task graph shown by `task-status/web.py`;
 - render a compact context summary for another agent.
@@ -24,20 +24,21 @@ after the current conversation is gone.
 
 ## Core Model
 
-Every node is an `Inquiry`:
+Every node is a `Task`:
 
-- `content`: natural-language task/question/issue. It must be specific enough to
-  recover context later.
+- `name`: simplest word or phrase describing the task.
 - `description`: one concrete explanation of what the node means or should
   produce. Keep it at or below 50 characters.
 - `status`: `candidate`, `ready`, `active`, `blocked`, or `done`.
-- `answer`: optional resolution. For `done`, explain what was decided, solved,
-  rejected, or deferred.
+- `notes`: current notes. For `blocked`, briefly record blocker information. For
+  `done`, explain what was decided, solved, rejected, or deferred.
+- `importance`: `low`, `medium`, or `high`; default to `medium` unless priority
+  is clearly low or high.
 
 Edges:
 
-- `decomposes_to`: broader inquiry to narrower inquiry.
-- `depends_on`: source inquiry needs target inquiry resolved first.
+- `decomposes_to`: broader task to narrower task.
+- `depends_on`: source task needs target task resolved first.
 - `relates_to`: weak useful relation. Use sparingly.
 
 `decomposes_to` and `depends_on` are DAG-like strong relations and should not
@@ -67,12 +68,12 @@ Add a short explanation:
 
 Rules:
 
-- `content` should say what problem the node is about, not just name a component.
+- `name` should be short and memorable.
 - `description` should answer "what is this for?" or "what output should exist?"
 - Avoid descriptions that merely repeat the title.
-- For `done` nodes, write an `answer`; future agents should not need to infer the
+- For `done` nodes, write `notes`; future agents should not need to infer the
   resolution from the title.
-- For `blocked` nodes, make the missing dependency explicit in `answer` when known.
+- For `blocked` nodes, make the missing dependency explicit in `notes` when known.
 
 ## Commands
 
@@ -94,7 +95,7 @@ Render deterministic task memory:
 /Users/duanyufi/anaconda3/bin/python task-status/cli.py render \
   --conversation-file conversation.md \
   --deterministic \
-  --output .tta-local-memory/TASK_STATUS.md
+  --output .gta-local-memory/TASK_STATUS.md
 ```
 
 Render deterministic state memory from the graph:
@@ -135,9 +136,9 @@ Ingest a conversation summary:
   --conversation-file conversation.md \
   --provider xiaomi \
   --model MiMo-V2.5-Pro \
-  --min-importance 0.65 \
+  --min-importance medium \
   --min-confidence 0.55 \
-  --max-inquiries 8 \
+  --max-tasks 8 \
   --dedupe-threshold 0.72
 ```
 
@@ -177,11 +178,11 @@ Before substantial work:
 
 During work:
 
-1. Keep normal project edits separate from `.tta-local-memory/`.
+1. Keep normal project edits separate from `.gta-local-memory/`.
 2. Do not directly edit the SQLite database unless the CLI or web API cannot do
    the needed operation.
-3. If graph labels are unclear, update both `content` and `description`; do not
-   hide important context only in `answer`.
+3. If graph labels are unclear, update both `name` and `description`; do not hide
+   important context only in `notes`.
 
 After substantial work:
 
@@ -194,8 +195,8 @@ After substantial work:
 
 ## Data And Git Hygiene
 
-- Default database: `.tta-local-memory/task-status.sqlite`.
-- `.tta-local-memory/` is intentionally ignored by git.
+- Default database: `.gta-local-memory/task-status.sqlite`.
+- `.gta-local-memory/` is intentionally ignored by git.
 - Source code, schema, prompts, and web viewer files under `task-status/` are
   tracked project files and should be reviewed like normal code.
 - Do not commit local memory database contents.

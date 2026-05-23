@@ -252,12 +252,12 @@ h1 {
   background: #f7e6b8;
 }
 
-.answer,
+.notes,
 .relations {
   margin-top: 16px;
 }
 
-.answer h3,
+.notes h3,
 .relations h3 {
   margin: 0 0 8px;
   font-size: 13px;

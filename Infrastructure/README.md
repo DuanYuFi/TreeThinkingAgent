@@ -59,7 +59,7 @@ infra = LLMInfrastructure(registry)
 vector = infra.embed_text(
     provider="huiyan_openai_claude",
     model_name="text-embedding-3-small",
-    text="TreeThinkingAgent connectivity probe.",
+    text="GraphThinkingAgent connectivity probe.",
 )
 print(len(vector))
 ```

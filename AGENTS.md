@@ -2,17 +2,17 @@
 
 ## Project
 
-This project is TreeThinkingAgent (TTA), an experimental cognitive architecture for helping language-model agents manage complex engineering work. It focuses on task trees, short-term and long-term memory, structured memory promotion, and LLM-friendly knowledge infrastructure.
+This project is GraphThinkingAgent (GTA), an experimental cognitive architecture for helping language-model agents manage complex engineering work. It focuses on task graphs, short-term and long-term memory, structured memory promotion, and LLM-friendly knowledge infrastructure.
 
 ## Collaboration Memory
 
 Local collaboration memory for discussions about building this project lives in:
 
-`.tta-local-memory/`
+`.gta-local-memory/`
 
-This directory is intentionally ignored by git. It is for private working notes, prompts, and memory about how we are developing TTA itself.
+This directory is intentionally ignored by git. It is for private working notes, prompts, and memory about how we are developing GTA itself.
 
-Do not confuse this folder with the memory management system that TTA will eventually build for agents. The ignored folder is only for our local project-development context; the product's future memory schemas, prompts, databases, RAG indices, ontology files, and runtime memory infrastructure should be designed separately in tracked project files when needed.
+Do not confuse this folder with the memory management system that GTA will eventually build for agents. The ignored folder is only for our local project-development context; the product's future memory schemas, prompts, databases, RAG indices, ontology files, and runtime memory infrastructure should be designed separately in tracked project files when needed.
 
 ## Rules
 

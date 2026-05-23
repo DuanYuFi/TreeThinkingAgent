@@ -12,11 +12,11 @@ from embeddings import (
     load_embedding_index,
     refresh_embeddings,
 )
-from store import content_similarity, similarity_tokens
+from store import IMPORTANCE_ORDER_SQL, IMPORTANCE_RANK, name_similarity, similarity_tokens
 
 
 NODE_COLUMNS = """
-    id, project_id, is_root, content, description, status, answer,
+    id, project_id, is_root, name, description, status, notes,
     importance, confidence, created_at, updated_at
 """
 
@@ -150,9 +150,9 @@ def fetch_root(conn: sqlite3.Connection, *, project_id: str) -> sqlite3.Row | No
     return conn.execute(
         f"""
         SELECT {NODE_COLUMNS}
-        FROM inquiries
+        FROM tasks
         WHERE project_id = ? AND is_root = 1
-        ORDER BY importance DESC, updated_at DESC
+        ORDER BY {IMPORTANCE_ORDER_SQL} DESC, updated_at DESC
         LIMIT 1
         """,
         (project_id,),
@@ -163,7 +163,7 @@ def fetch_nodes_by_id(conn: sqlite3.Connection, *, project_id: str) -> dict[str,
     rows = conn.execute(
         f"""
         SELECT {NODE_COLUMNS}
-        FROM inquiries
+        FROM tasks
         WHERE project_id = ?
         """,
         (project_id,),
@@ -175,9 +175,9 @@ def fetch_edges(conn: sqlite3.Connection, *, project_id: str) -> list[sqlite3.Ro
     return conn.execute(
         """
         SELECT e.id, e.source_id, e.target_id, e.relation, e.note, e.created_at
-        FROM inquiry_edges e
-        JOIN inquiries source ON source.id = e.source_id
-        JOIN inquiries target ON target.id = e.target_id
+        FROM task_edges e
+        JOIN tasks source ON source.id = e.source_id
+        JOIN tasks target ON target.id = e.target_id
         WHERE source.project_id = ? AND target.project_id = ?
         ORDER BY e.created_at ASC, e.id ASC
         """,
@@ -270,7 +270,7 @@ def find_best_embedding_match(
         key=lambda item: (
             item["rank_score"],
             0 if item["root_distance"] == "unknown" else item["root_distance"],
-            item["node"]["importance"],
+            IMPORTANCE_RANK.get(item["node"]["importance"], 1),
             item["node"]["updated_at"],
         ),
     )
@@ -291,7 +291,7 @@ def find_best_local_match(
     scored: list[dict[str, Any]] = []
     for node in nodes:
         text = node_search_text(node)
-        score = content_similarity(query_tokens, similarity_tokens(text))
+        score = name_similarity(query_tokens, similarity_tokens(text))
         if score < min_score:
             continue
         distance = depths.get(node["id"])
@@ -313,7 +313,7 @@ def find_best_local_match(
         key=lambda item: (
             item["rank_score"],
             0 if item["root_distance"] == "unknown" else item["root_distance"],
-            item["node"]["importance"],
+            IMPORTANCE_RANK.get(item["node"]["importance"], 1),
             item["node"]["updated_at"],
         ),
     )
@@ -435,7 +435,7 @@ def explain_relations_between(root_id: str, node_id: str, edges: list[sqlite3.Ro
 
 
 def node_search_text(node: sqlite3.Row) -> str:
-    parts = [node["content"], node["description"], node["answer"] or ""]
+    parts = [node["name"], node["description"], node["notes"] or ""]
     return " ".join(part for part in parts if part)
 
 
@@ -443,18 +443,19 @@ def node_sort_key(node: sqlite3.Row) -> tuple:
     status_order = {"active": 0, "blocked": 1, "ready": 2, "done": 3, "candidate": 4}
     return (
         status_order.get(node["status"], 9),
-        -float(node["importance"] or 0),
-        node["content"],
+        -IMPORTANCE_RANK.get(node["importance"], 1),
+        node["name"],
     )
 
 
 def format_node_block(node: sqlite3.Row, *, explanation: str) -> list[str]:
     lines = [
-        f"- **{node['content']}** (`{node['id']}`)",
+        f"- **{node['name']}** (`{node['id']}`)",
         f"  - description: {node['description'] or 'No description recorded.'}",
         f"  - status: {node['status']}",
+        f"  - importance: {node['importance']}",
         f"  - explanation: {explanation}",
     ]
-    if node["answer"]:
-        lines.append(f"  - answer: {node['answer']}")
+    if node["notes"]:
+        lines.append(f"  - notes: {node['notes']}")
     return lines

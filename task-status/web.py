@@ -8,16 +8,25 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
+from llm_client import complete_with_infrastructure, extract_json_object
+from prompts import EXTRACTION_SYSTEM_PROMPT, build_extraction_user_prompt
 from store import (
     DEFAULT_DB_PATH,
+    IMPORTANCE_ORDER_SQL,
+    VALID_IMPORTANCE,
     VALID_RELATIONS,
+    VALID_STATUSES,
     concise_description,
     creates_relation_cycle,
     init_db,
     normalize_text,
+    parse_extraction_payload,
+    preview_task_changes,
     utc_now,
 )
 STATIC_DIR = Path(__file__).with_name("web")
+DEFAULT_PROVIDER = "huiyan_openai_claude"
+DEFAULT_MODEL = "gpt-5.5"
 
 
 def main() -> int:
@@ -55,6 +64,15 @@ def make_handler(db_path: Path):
 
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
+            if parsed.path == "/api/preview-ingest":
+                try:
+                    payload = self.read_json()
+                    self.send_json(preview_ingest(db_path, payload))
+                except ValueError as exc:
+                    self.send_json({"error": str(exc)}, status=400)
+                except RuntimeError as exc:
+                    self.send_json({"error": str(exc)}, status=502)
+                return
             if parsed.path == "/api/edges":
                 try:
                     payload = self.read_json()
@@ -132,9 +150,9 @@ def load_graph(db_path: Path) -> dict:
     init_db(conn)
 
     all_node_rows = conn.execute(
-        """
-        SELECT id, project_id, is_root, content, description, status, answer, importance, confidence, created_at, updated_at
-        FROM inquiries
+        f"""
+        SELECT id, project_id, is_root, name, description, status, notes, importance, confidence, created_at, updated_at
+        FROM tasks
         ORDER BY
             is_root DESC,
             CASE status
@@ -144,21 +162,21 @@ def load_graph(db_path: Path) -> dict:
                 WHEN 'done' THEN 3
                 ELSE 4
             END,
-            importance DESC,
+            {IMPORTANCE_ORDER_SQL} DESC,
             updated_at DESC
         """
     ).fetchall()
     all_edge_rows = conn.execute(
         """
         SELECT id, source_id, target_id, relation, note, created_at
-        FROM inquiry_edges
+        FROM task_edges
         ORDER BY created_at DESC, id DESC
         """
     ).fetchall()
     root_distances = shortest_distances_from_roots(all_node_rows, all_edge_rows)
 
     count_rows = conn.execute(
-        "SELECT status, COUNT(*) AS count FROM inquiries GROUP BY status"
+        "SELECT status, COUNT(*) AS count FROM tasks GROUP BY status"
     ).fetchall()
     return {
         "nodes": [node_payload(row, root_distances) for row in all_node_rows],
@@ -167,43 +185,147 @@ def load_graph(db_path: Path) -> dict:
     }
 
 
+def preview_ingest(db_path: Path, payload: dict) -> dict:
+    conversation = str(
+        payload.get("conversation")
+        or payload.get("text")
+        or payload.get("description")
+        or ""
+    ).strip()
+    if not conversation:
+        raise ValueError("Provide `conversation`, `text`, or `description`.")
+
+    provider = str(payload.get("provider") or DEFAULT_PROVIDER)
+    model = str(payload.get("model") or DEFAULT_MODEL)
+    max_tokens = int(payload.get("max_tokens") or 2048)
+    temperature = float(payload.get("temperature") or 0.1)
+    min_importance = str(payload.get("min_importance") or "medium").strip().lower()
+    if min_importance not in VALID_IMPORTANCE:
+        raise ValueError("min_importance must be one of: low, medium, high.")
+    min_confidence = float(payload.get("min_confidence") or 0.55)
+    max_tasks = int(payload.get("max_tasks") or 8)
+    dedupe_threshold = float(payload.get("dedupe_threshold") or 0.72)
+
+    user_prompt = build_extraction_user_prompt(
+        conversation,
+        min_importance=min_importance,
+        min_confidence=min_confidence,
+        max_tasks=max_tasks,
+        dedupe_threshold=dedupe_threshold,
+    )
+    try:
+        reply = complete_with_infrastructure(
+            provider=provider,
+            model_name=model,
+            system_prompt=EXTRACTION_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+    except Exception as exc:  # noqa: BLE001 - surface provider failures to the local test API.
+        raise RuntimeError(f"LLM preview failed: {exc}") from exc
+
+    extraction_payload = extract_json_object(reply)
+    tasks, edges = parse_extraction_payload(extraction_payload)
+    conn = open_preview_connection(db_path)
+    try:
+        preview = preview_task_changes(
+            conn,
+            tasks,
+            edges,
+            conversation=conversation,
+            min_importance=min_importance,
+            min_confidence=min_confidence,
+            max_tasks=max_tasks,
+            dedupe_threshold=dedupe_threshold,
+        )
+    finally:
+        conn.close()
+
+    return {
+        "mode": "dry_run",
+        "provider": provider,
+        "model": model,
+        "raw_payload": extraction_payload,
+        "preview": preview,
+    }
+
+
+def open_preview_connection(db_path: Path) -> sqlite3.Connection:
+    if db_path.exists():
+        migrator = sqlite3.connect(db_path)
+        migrator.row_factory = sqlite3.Row
+        migrator.execute("PRAGMA foreign_keys = ON")
+        init_db(migrator)
+        migrator.close()
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    else:
+        conn = sqlite3.connect(":memory:")
+        init_db(conn)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
 def update_node(db_path: Path, node_id: str, payload: dict) -> dict:
-    content = normalize_text(str(payload.get("content", "")))
+    name = normalize_text(str(payload.get("name") or payload.get("content") or ""))
     if not node_id:
         raise ValueError("Node id is required.")
-    if not content:
-        raise ValueError("Content is required.")
+    if not name:
+        raise ValueError("Name is required.")
 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     init_db(conn)
     existing = conn.execute(
-        "SELECT id, answer, description FROM inquiries WHERE id = ?",
+        "SELECT id, notes, description, status, importance FROM tasks WHERE id = ?",
         (node_id,),
     ).fetchone()
     if not existing:
         raise ValueError(f"Node not found: {node_id}")
+    notes = existing["notes"]
+    if "notes" in payload:
+        notes_value = payload.get("notes")
+        notes = normalize_text(str(notes_value)) if notes_value not in (None, "") else None
+    status = normalize_text(str(payload.get("status", existing["status"]))).lower()
+    if status not in VALID_STATUSES:
+        raise ValueError(f"Invalid status: {status}")
+    importance = normalize_text(str(payload.get("importance", existing["importance"]))).lower()
+    if importance not in VALID_IMPORTANCE:
+        raise ValueError("importance must be one of: low, medium, high.")
     if "description" in payload:
         description = concise_description(
             payload.get("description"),
-            content=content,
-            answer=existing["answer"],
+            name=name,
+            notes=notes,
         )
     else:
         description = existing["description"] or concise_description(
             None,
-            content=content,
-            answer=existing["answer"],
+            name=name,
+            notes=notes,
         )
     with conn:
         cursor = conn.execute(
-            "UPDATE inquiries SET content = ?, description = ?, updated_at = ? WHERE id = ?",
-            (content, description, utc_now(), node_id),
+            """
+            UPDATE tasks
+            SET name = ?, description = ?, notes = ?, status = ?, importance = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (name, description, notes, status, importance, utc_now(), node_id),
         )
     if cursor.rowcount == 0:
         raise ValueError(f"Node not found: {node_id}")
-    return {"ok": True, "id": node_id, "content": content, "description": description}
+    return {
+        "ok": True,
+        "id": node_id,
+        "name": name,
+        "description": description,
+        "notes": notes,
+        "status": status,
+        "importance": importance,
+    }
 
 
 def create_edge(db_path: Path, payload: dict) -> dict:
@@ -224,8 +346,8 @@ def create_edge(db_path: Path, payload: dict) -> dict:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     init_db(conn)
-    source = conn.execute("SELECT id FROM inquiries WHERE id = ?", (source_id,)).fetchone()
-    target = conn.execute("SELECT id FROM inquiries WHERE id = ?", (target_id,)).fetchone()
+    source = conn.execute("SELECT id FROM tasks WHERE id = ?", (source_id,)).fetchone()
+    target = conn.execute("SELECT id FROM tasks WHERE id = ?", (target_id,)).fetchone()
     if not source or not target:
         raise ValueError("Source or target node does not exist.")
     if relation in {"depends_on", "decomposes_to"} and creates_relation_cycle(conn, source_id, target_id, relation):
@@ -234,7 +356,7 @@ def create_edge(db_path: Path, payload: dict) -> dict:
     with conn:
         cursor = conn.execute(
             """
-            INSERT INTO inquiry_edges (source_id, target_id, relation, note, created_at)
+            INSERT INTO task_edges (source_id, target_id, relation, note, created_at)
             VALUES (?, ?, ?, ?, ?)
             """,
             (source_id, target_id, relation, note, utc_now()),
@@ -253,7 +375,7 @@ def delete_edge(db_path: Path, edge_id: str) -> dict:
     conn.execute("PRAGMA foreign_keys = ON")
     init_db(conn)
     with conn:
-        cursor = conn.execute("DELETE FROM inquiry_edges WHERE id = ?", (parsed_edge_id,))
+        cursor = conn.execute("DELETE FROM task_edges WHERE id = ?", (parsed_edge_id,))
     if cursor.rowcount == 0:
         raise ValueError(f"Edge not found: {parsed_edge_id}")
     return {"ok": True, "id": parsed_edge_id}

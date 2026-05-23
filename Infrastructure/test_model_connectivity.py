@@ -9,7 +9,7 @@ API 连通性测试：对 model_registry.json 中每个已配置 API key 的供�
 
 也可以在 unittest 入口下用环境变量筛选供应商::
 
-    TTA_TEST_PROVIDER=huiyan_cn /Users/duanyufi/anaconda3/bin/python -m unittest Infrastructure.test_model_connectivity -v
+    GTA_TEST_PROVIDER=huiyan_cn /Users/duanyufi/anaconda3/bin/python -m unittest Infrastructure.test_model_connectivity -v
 
 需要：对应供应商的环境变量已设置（见 registry 中 api_key 占位符）、网络可达。
 未设置 key 的供应商会从测试中排除（临时生成的 registry 不含这些条目）。
@@ -42,13 +42,13 @@ def _split_names(raw: str) -> set[str]:
 
 
 def _provider_filter_from_env() -> set[str] | None:
-    raw = os.getenv("TTA_TEST_PROVIDERS") or os.getenv("TTA_TEST_PROVIDER") or ""
+    raw = os.getenv("GTA_TEST_PROVIDERS") or os.getenv("GTA_TEST_PROVIDER") or ""
     selected = _split_names(raw)
     return selected or None
 
 
 def _model_filter_from_env() -> set[str] | None:
-    raw = os.getenv("TTA_TEST_MODELS") or os.getenv("TTA_TEST_MODEL") or ""
+    raw = os.getenv("GTA_TEST_MODELS") or os.getenv("GTA_TEST_MODEL") or ""
     selected = _split_names(raw)
     return selected or None
 
@@ -241,7 +241,7 @@ class TestModelRegistryConnectivity(unittest.TestCase):
                         result = self.infra.embed_texts_with_usage(
                             provider,
                             model_name,
-                            ["TTA connectivity embedding probe."],
+                            ["GTA connectivity embedding probe."],
                             timeout_seconds=180,
                         )
                         vector = result.embeddings[0] if result.embeddings else []
